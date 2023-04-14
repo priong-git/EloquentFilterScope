@@ -1,0 +1,163 @@
+version: '3'
+
+networks:
+  laravel_base:
+
+volumes:
+  dbdata:
+  redis_data:
+
+services:
+  site:
+    image: nginx:stable-alpine
+    container_name: laravel_base_site
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - ./:/var/www/html
+      - ./.docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./.docker/cert:/etc/nginx/ssl/
+    depends_on:
+      - php
+      - mysql
+      - redis
+    networks:
+      - laravel_base
+
+  mysql:
+    image: mariadb:10
+    container_name: laravel_base_mysql
+    ports:
+      - 3306:3306
+    environment:
+      MYSQL_ROOT_PASSWORD: '${DB_PASSWORD}'
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_DATABASE: '${DB_DATABASE}'
+      MYSQL_USER: '${DB_USERNAME}'
+      MYSQL_PASSWORD: '${DB_PASSWORD}'
+      MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+    networks:
+      - laravel_base
+    volumes:
+      - dbdata:/var/lib/mysql
+      - ./:/var/www/html
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-p${DB_PASSWORD}"]
+      retries: 3
+      timeout: 5s
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: laravel_base_phpmyadmin
+    ports:
+      - "8081:80"
+    links:
+      - mysql
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: '${DB_PORT}'
+      PMA_ARBITRARY: 1
+      UPLOAD_LIMIT: 2G
+    #restart: always
+    networks:
+      - laravel_base
+
+  redis:
+    image: redis:alpine
+    container_name: laravel_base_redis
+    ports:
+      - 6379:6379
+    networks:
+      - laravel_base
+    volumes:
+      - redis_data:/data
+
+  php:
+    build:
+      context: .
+      dockerfile: .docker/php/Dockerfile
+    container_name: laravel_base_php
+    volumes:
+      - ./:/var/www/html
+    ports:
+      - 9000
+    networks:
+      - laravel_base
+
+  composer:
+    image: composer:latest
+    container_name: laravel_base_composer
+    volumes:
+      - ./:/var/www/html
+    working_dir: /var/www/html
+    depends_on:
+      - php
+    networks:
+      - laravel_base
+
+  npm:
+    image: node:13.7
+    container_name: laravel_base_npm
+    volumes:
+      - ./:/var/www/html
+    working_dir: /var/www/html
+    entrypoint: ['npm']
+    networks:
+      - laravel_base
+
+  artisan:
+    build:
+      context: .
+      dockerfile: .docker/php/Dockerfile
+    container_name: laravel_base_artisan
+    volumes:
+      - ./:/var/www/html
+    depends_on:
+      - mysql
+      - php
+      - redis
+    working_dir: /var/www/html
+    entrypoint: ['php', '/var/www/html/artisan']
+    networks:
+      - laravel_base
+
+  scheduler:
+    container_name: laravel_base_scheduler
+    build:
+      context: .
+      dockerfile: .docker/php/Dockerfile
+    volumes:
+      - ./.docker/scheduler.sh:/run.sh
+      - ./:/var/www/html
+    working_dir: /var/www/html
+    depends_on:
+      - site
+    networks:
+      - laravel_base
+    command: /bin/sh /run.sh
+
+  worker:
+    container_name: laravel_base_worker
+    build:
+      context: .
+      dockerfile: .docker/php/Dockerfile
+    volumes:
+      - ./:/var/www/html
+    working_dir: /var/www/html
+    #restart: always
+    depends_on:
+      - site
+      - redis
+    networks:
+      - laravel_base
+    command: php /var/www/html/artisan queue:work
+
+  mailhog:
+    container_name: laravel_base_mailhog
+    image: mailhog/mailhog:latest
+    ports:
+      - 1025:1025
+      - 8025:8025
+    networks:
+      - laravel_base
